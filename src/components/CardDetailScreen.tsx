@@ -251,16 +251,18 @@ export function CardDetailScreen({
       </div>
 
       {/* Tabs */}
-      <div className="px-4 flex rounded-lg border border-border overflow-hidden mx-4 mb-4">
-        {tabs.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`flex-1 py-2 text-sm font-medium transition-colors ${tab === t.id ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            {t.label}{t.count != null ? ` (${t.count})` : ''}
-          </button>
-        ))}
+      <div className="px-4 mx-4 mb-4">
+        <div className="flex rounded-lg border border-border p-0.5 gap-0.5 bg-muted/40">
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${tab === t.id ? 'bg-muted text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {t.label}{t.count != null ? ` (${t.count})` : ''}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Tab content */}
