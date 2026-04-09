@@ -1,9 +1,9 @@
-import { useRef, useCallback, useState, useMemo } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import Papa from 'papaparse'
 import { detectAndParse } from '@/lib/parsers'
 import type { CardAccount, Resolution, Transaction, UploadedFile } from '@/lib/parsers/types'
 import type { CardDoc } from '@/lib/db'
-import { addCardOwner, lookupUidByEmail } from '@/lib/db'
+import { removeCardOwner, addCardOwner, lookupUidByEmail, lookupEmailByUid } from '@/lib/db'
 import { matchTransactions, formatAmount } from '@/lib/matcher'
 import { ResolveDialog } from '@/components/ResolveDialog'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ interface CardDetailScreenProps {
   resolutions: Resolution[]
   excluded: Set<string>
   cardDoc: CardDoc
+  currentUid: string
   onAccountChange: (updated: CardAccount) => void
   onAddResolution: (r: Resolution) => void
   onRemoveResolution: (debitId: string) => void
@@ -54,6 +55,7 @@ export function CardDetailScreen({
   resolutions,
   excluded,
   cardDoc,
+  currentUid,
   onAccountChange,
   onAddResolution,
   onRemoveResolution,
@@ -782,8 +784,10 @@ export function CardDetailScreen({
         <ShareDialog
           account={account}
           cardDoc={cardDoc}
+          currentUid={currentUid}
           onAccountChange={onAccountChange}
           onClose={() => setShowShareDialog(false)}
+          onLeave={onBack}
         />
       )}
     </div>
@@ -795,94 +799,174 @@ export function CardDetailScreen({
 function ShareDialog({
   account,
   cardDoc,
+  currentUid,
   onAccountChange,
   onClose,
+  onLeave,
 }: {
   account: CardAccount
   cardDoc: CardDoc
+  currentUid: string
   onAccountChange: (updated: CardAccount) => void
   onClose: () => void
+  onLeave: () => void
 }) {
+  const isOwner = account.owners[0] === currentUid
   const [email, setEmail] = useState('')
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'not-found' | 'already-shared' | 'error'>('idle')
+  const [addStatus, setAddStatus] = useState<'idle' | 'loading' | 'success' | 'not-found' | 'already-shared' | 'error'>('idle')
+  const [revoking, setRevoking] = useState<string | null>(null)
+  const [ownerEmails, setOwnerEmails] = useState<Record<string, string>>({})
+  const [ownersOpen, setOwnersOpen] = useState(false)
+
+  // Fetch emails for all owners on mount and whenever owners list changes
+  useEffect(() => {
+    let cancelled = false
+    Promise.all(
+      account.owners.map(uid => lookupEmailByUid(uid).then(e => ({ uid, email: e ?? uid })))
+    ).then(results => {
+      if (cancelled) return
+      setOwnerEmails(Object.fromEntries(results.map(r => [r.uid, r.email])))
+    })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.owners.join(',')])
 
   const handleShare = async (e: React.FormEvent) => {
     e.preventDefault()
-    const trimmed = email.trim().toLowerCase()
-    if (!trimmed) return
-
-    if (trimmed === account.owners.find(() => true)) {
-      // edge case — skip
-    }
-
-    setStatus('loading')
+    setAddStatus('loading')
     try {
-      const uid = await lookupUidByEmail(trimmed)
-      if (!uid) {
-        setStatus('not-found')
-        return
-      }
-      if (account.owners.includes(uid)) {
-        setStatus('already-shared')
-        return
-      }
+      const uid = await lookupUidByEmail(email.trim().toLowerCase())
+      if (!uid) { setAddStatus('not-found'); return }
+      if (account.owners.includes(uid)) { setAddStatus('already-shared'); return }
       await addCardOwner(cardDoc, uid)
-      // Update local state so the owners array reflects immediately
       onAccountChange({ ...account, owners: [...account.owners, uid] })
-      setStatus('success')
       setEmail('')
+      setAddStatus('success')
     } catch {
-      setStatus('error')
+      setAddStatus('error')
     }
   }
 
-  const ownerCount = account.owners.length
+  const handleRevoke = async (uid: string) => {
+    setRevoking(uid)
+    try {
+      await removeCardOwner(cardDoc, uid)
+      onAccountChange({ ...account, owners: account.owners.filter(o => o !== uid) })
+    } catch {
+      // ignore
+    } finally {
+      setRevoking(null)
+    }
+  }
+
+  const handleLeave = async () => {
+    try {
+      await removeCardOwner(cardDoc, currentUid)
+      onClose()
+      onLeave()
+    } catch {
+      // ignore
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 sm:p-4" onClick={onClose}>
       <div className="w-full sm:max-w-sm bg-background rounded-t-2xl sm:rounded-2xl shadow-xl px-5 pt-5 pb-8 sm:pb-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">Share card</h2>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          {ownerCount === 1
-            ? 'Only you have access. Enter an email to share.'
-            : `${ownerCount} people have access.`}
-        </p>
+        {/* Collaborator list */}
+        {account.owners.length > 1 && (
+          <div className="space-y-1">
+            <button
+              onClick={() => setOwnersOpen(o => !o)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <p className="text-xs font-medium text-muted-foreground">People with access ({account.owners.length})</p>
+              <svg xmlns="http://www.w3.org/2000/svg" className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${ownersOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {ownersOpen && (
+              <div className="rounded-lg border border-border divide-y divide-border">
+                {account.owners.map((uid, i) => {
+                  const isCreator = i === 0
+                  const isMe = uid === currentUid
+                  const canRevoke = isOwner && !isCreator // owner can revoke non-creators
+                  const canLeave = isMe && !isCreator     // guest can leave
+                  const displayName = isMe ? 'You' : (ownerEmails[uid] ?? `${uid.slice(0, 6)}…`)
+                  return (
+                    <div key={uid} className="flex items-center justify-between px-3 py-2.5 gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium truncate">{displayName}</p>
+                          <p className="text-xs text-muted-foreground">{isCreator ? 'Owner' : 'Collaborator'}</p>
+                        </div>
+                      </div>
+                      {canRevoke && (
+                        <button
+                          onClick={() => handleRevoke(uid)}
+                          disabled={revoking === uid}
+                          className="text-xs text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                        >
+                          {revoking === uid ? 'Removing…' : 'Revoke'}
+                        </button>
+                      )}
+                      {canLeave && (
+                        <button
+                          onClick={handleLeave}
+                          className="text-xs text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                        >
+                          Leave
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
-        <form onSubmit={handleShare} className="space-y-3">
-          <input
-            type="email"
-            required
-            placeholder="colleague@example.com"
-            value={email}
-            onChange={e => { setEmail(e.target.value); setStatus('idle') }}
-            className="w-full px-3 py-2 text-sm rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-          />
+        {/* Add person — owner only */}
+        {isOwner && (
+          <form onSubmit={handleShare} className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              {account.owners.length === 1 ? 'Only you have access. Add someone by email.' : 'Add another person by email.'}
+            </p>
+            <input
+              type="email"
+              required
+              placeholder="colleague@example.com"
+              value={email}
+              onChange={e => { setEmail(e.target.value); setAddStatus('idle') }}
+              className="w-full px-3 py-2 text-sm rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            {addStatus === 'not-found' && <p className="text-xs text-destructive">No account found with that email. They need to sign up first.</p>}
+            {addStatus === 'already-shared' && <p className="text-xs text-muted-foreground">This person already has access.</p>}
+            {addStatus === 'success' && <p className="text-xs text-green-600">Access granted.</p>}
+            {addStatus === 'error' && <p className="text-xs text-destructive">Something went wrong. Try again.</p>}
+            <Button type="submit" className="w-full" disabled={addStatus === 'loading'}>
+              {addStatus === 'loading' ? 'Adding…' : 'Add person'}
+            </Button>
+          </form>
+        )}
 
-          {status === 'not-found' && (
-            <p className="text-xs text-destructive">No account found with that email. They need to sign up first.</p>
-          )}
-          {status === 'already-shared' && (
-            <p className="text-xs text-muted-foreground">This person already has access.</p>
-          )}
-          {status === 'success' && (
-            <p className="text-xs text-green-600">Access granted.</p>
-          )}
-          {status === 'error' && (
-            <p className="text-xs text-destructive">Something went wrong. Try again.</p>
-          )}
-
-          <Button type="submit" className="w-full" disabled={status === 'loading'}>
-            {status === 'loading' ? 'Adding…' : 'Add person'}
-          </Button>
-        </form>
+        {/* Guest: only show collaborators list + leave option handled inline above */}
+        {!isOwner && account.owners.length === 1 && (
+          <p className="text-xs text-muted-foreground text-center">This card was shared with you.</p>
+        )}
       </div>
     </div>
   )

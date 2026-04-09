@@ -12,6 +12,7 @@
 
 import {
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   collection,
@@ -49,6 +50,13 @@ export async function lookupUidByEmail(email: string): Promise<string | null> {
   const snap = await getDocs(q)
   if (snap.empty) return null
   return snap.docs[0].id  // doc id = uid
+}
+
+/** Look up the email for a given UID. Returns null if profile not found. */
+export async function lookupEmailByUid(uid: string): Promise<string | null> {
+  const snap = await getDoc(doc(db, 'userProfiles', uid))
+  if (!snap.exists()) return null
+  return (snap.data() as { email: string }).email
 }
 
 // ── Card CRUD ─────────────────────────────────────────────────────────────────
@@ -111,6 +119,18 @@ export async function addCardOwner(cardDoc: CardDoc, newOwnerUid: string): Promi
     account: {
       ...cardDoc.account,
       owners: [...cardDoc.account.owners, newOwnerUid],
+    },
+  }
+  await saveCard(updated)
+}
+
+/** Remove a user UID from a card's owners array */
+export async function removeCardOwner(cardDoc: CardDoc, uidToRemove: string): Promise<void> {
+  const updated: CardDoc = {
+    ...cardDoc,
+    account: {
+      ...cardDoc.account,
+      owners: cardDoc.account.owners.filter(uid => uid !== uidToRemove),
     },
   }
   await saveCard(updated)

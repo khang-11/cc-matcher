@@ -177,6 +177,7 @@ export default function App() {
           resolutions={activeDoc.resolutions}
           excluded={new Set(activeDoc.excluded)}
           cardDoc={activeDoc}
+          currentUid={user?.uid ?? ''}
           onAccountChange={handleUpdateAccount}
           onAddResolution={r => handleAddResolution(activeDoc.account.id, r)}
           onRemoveResolution={debitId => handleRemoveResolution(activeDoc.account.id, debitId)}

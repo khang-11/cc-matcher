@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CardAccount } from '@/lib/parsers/types'
-import type { CardDoc } from '@/lib/db'
+import { removeCardOwner, type CardDoc } from '@/lib/db'
 import { matchTransactions, formatAmount } from '@/lib/matcher'
 import { AddCardDialog } from '@/components/AddCardDialog'
 import { EditCardDialog } from '@/components/EditCardDialog'
@@ -57,6 +57,13 @@ export function CardListScreen({
 
   const handleDelete = (id: string) => {
     onDeleteCard(id)
+    setEditingAccount(null)
+  }
+
+  const handleLeave = async (account: CardAccount) => {
+    const doc = cardDocs.get(account.id)
+    if (!doc) return
+    await removeCardOwner(doc, currentUid).catch(console.error)
     setEditingAccount(null)
   }
 
@@ -203,14 +210,18 @@ export function CardListScreen({
         <AddCardDialog onAdd={handleAdd} onClose={() => setShowAddDialog(false)} />
       )}
 
-      {editingAccount && (
-        <EditCardDialog
-          account={editingAccount}
-          onSave={(name, minSpend) => handleSaveEdit(editingAccount.id, name, minSpend)}
-          onDelete={() => handleDelete(editingAccount.id)}
-          onClose={() => setEditingAccount(null)}
-        />
-      )}
+      {editingAccount && (() => {
+        const isOwner = editingAccount.owners[0] === currentUid
+        return (
+          <EditCardDialog
+            account={editingAccount}
+            isOwner={isOwner}
+            onSave={(name, minSpend) => handleSaveEdit(editingAccount.id, name, minSpend)}
+            onDelete={isOwner ? () => handleDelete(editingAccount.id) : () => handleLeave(editingAccount)}
+            onClose={() => setEditingAccount(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
