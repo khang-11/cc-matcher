@@ -1,4 +1,4 @@
-import type { Parser, Transaction, TransactionStatus } from './types'
+import type { Parser, Transaction } from './types'
 
 // NAB CSV headers:
 // Date,Amount,Account Number,,Transaction Type,Transaction Details,Balance,Category,Merchant Name,Processed On
@@ -42,10 +42,6 @@ export const NABParser: Parser = {
         const type = rawAmount >= 0 ? 'credit' : 'debit'
         const amount = Math.abs(rawAmount)
 
-        // Pending if no "Processed On" date
-        const processedOn = row['Processed On']?.trim()
-        const status: TransactionStatus = processedOn ? 'posted' : 'pending'
-
         // Use Merchant Name if available, fall back to Transaction Details
         const merchantName = row['Merchant Name']?.trim()
         const details = row['Transaction Details']?.trim() ?? ''
@@ -67,7 +63,6 @@ export const NABParser: Parser = {
           amount,
           type,
           card,
-          status,
           raw: row,
         }
       })

@@ -5,6 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 
+/** The caller is responsible for adding resolvedAt and accountId */
+type PartialResolution = Omit<Resolution, 'resolvedAt' | 'accountId'>
+
 interface ResolveDialogProps {
   /** The transaction to resolve — either an unmatched debit or an unmatched credit */
   anchor: Transaction
@@ -14,7 +17,7 @@ interface ResolveDialogProps {
   allCredits: Transaction[]
   unmatchedDebits: Transaction[]
   allDebits: Transaction[]
-  onResolve: (r: Resolution) => void
+  onResolve: (r: PartialResolution) => void
   onClose: () => void
 }
 
@@ -96,9 +99,6 @@ export function ResolveDialog({
               <div className="flex flex-col gap-0.5 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium truncate">{anchor.description}</span>
-                  {anchor.status === 'pending' && (
-                    <Badge variant="outline" className="text-xs shrink-0">Pending</Badge>
-                  )}
                 </div>
                 <span className="text-xs text-muted-foreground">{formatDate(anchor.date)}</span>
               </div>

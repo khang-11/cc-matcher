@@ -43,6 +43,10 @@ export function matchTransactions(
   const allCredits = [...credits]
 
   // --- Phase 1: exact-amount multiset matching ---
+  // Debits that already have a manual resolution are excluded from auto-matching —
+  // once you've manually touched a debit its remainder must also be resolved manually.
+  const resolvedDebitIds = new Set(resolutions.map(r => r.debitId))
+
   const creditPool = new Map<number, Transaction[]>()
   for (const credit of credits) {
     const key = Math.round(credit.amount * 100)
@@ -58,6 +62,11 @@ export function matchTransactions(
   const autoUnmatched: Transaction[] = []
 
   for (const debit of debits) {
+    if (resolvedDebitIds.has(debit.id)) {
+      // Skip auto-matching — this debit is handled by a manual resolution
+      autoUnmatched.push(debit)
+      continue
+    }
     const key = Math.round(debit.amount * 100)
     const bucket = creditPool.get(key)
     if (bucket && bucket.length > 0) {

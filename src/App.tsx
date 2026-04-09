@@ -1,102 +1,165 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
-import { loadState, saveState, subscribeState } from '@/lib/db'
+import {
+  subscribeUserCards,
+  saveCardDebounced,
+  saveCard,
+  deleteCard,
+  upsertUserProfile,
+  type CardDoc,
+} from '@/lib/db'
 import { AuthGate } from '@/components/AuthGate'
-import { CardPicker } from '@/components/CardPicker'
-import { Results } from '@/components/Results'
+import { CardListScreen } from '@/components/CardListScreen'
+import { CardDetailScreen } from '@/components/CardDetailScreen'
 import type { CardAccount, Resolution } from '@/lib/parsers/types'
 
-type Step = 'pick' | 'results'
+type Screen = { id: 'list' } | { id: 'detail'; accountId: string }
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [authReady, setAuthReady] = useState(false)
 
-  const [step, setStep] = useState<Step>('pick')
-  const [accounts, setAccounts] = useState<CardAccount[]>([])
-  const [resolutions, setResolutions] = useState<Resolution[]>([])
-  const [excluded, setExcluded] = useState<Set<string>>(new Set())
+  const [screen, setScreen] = useState<Screen>({ id: 'list' })
 
-  // Track whether we're applying a remote update so we don't echo it back
-  const applyingRemote = useRef(false)
+  // cardDocs: map from cardId → CardDoc (source of truth from Firestore)
+  const [cardDocs, setCardDocs] = useState<Map<string, CardDoc>>(new Map())
 
-  // ── Auth listener ────────────────────────────────────────────────────────
+  // Track which card ids came from remote so we don't re-save them
+  const remoteCardIds = useRef<Set<string>>(new Set())
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    return onAuthStateChanged(auth, u => {
+    return onAuthStateChanged(auth, async u => {
       setUser(u)
       setAuthReady(true)
+      if (u && u.email) {
+        // Write profile so this user is discoverable by email for sharing
+        await upsertUserProfile(u.uid, u.email).catch(console.error)
+      }
     })
   }, [])
 
-  // ── Load + subscribe to Firestore once logged in ─────────────────────────
+  // ── Firestore subscribe ───────────────────────────────────────────────────
   useEffect(() => {
-    if (!user) return
+    if (!user) {
+      setCardDocs(new Map())
+      return
+    }
 
-    // One-time load on login
-    loadState().then(state => {
-      if (state) {
-        applyingRemote.current = true
-        setAccounts(state.accounts ?? [])
-        setResolutions(state.resolutions ?? [])
-        setExcluded(new Set(state.excluded ?? []))
-        applyingRemote.current = false
-      }
-    })
+    const unsub = subscribeUserCards(user.uid, docs => {
+      setCardDocs(prev => {
+        const next = new Map(prev)
+        const incomingIds = new Set(docs.map(d => d.account.id))
 
-    // Real-time subscription for multi-user live sync
-    const unsub = subscribeState(state => {
-      applyingRemote.current = true
-      setAccounts(state.accounts ?? [])
-      setResolutions(state.resolutions ?? [])
-      setExcluded(new Set(state.excluded ?? []))
-      applyingRemote.current = false
+        // Remove cards that were deleted remotely (no longer in query results)
+        for (const id of next.keys()) {
+          if (!incomingIds.has(id)) next.delete(id)
+        }
+        // Update/add incoming docs
+        for (const d of docs) {
+          remoteCardIds.current.add(d.account.id)
+          next.set(d.account.id, d)
+        }
+        return next
+      })
     })
 
     return unsub
   }, [user])
 
-  // ── Persist state to Firestore on every change ───────────────────────────
-  // Skip on the very first render and when we're applying a remote snapshot
-  const isFirstRender = useRef(true)
-  useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return }
-    if (!user) return
-    if (applyingRemote.current) return
-    saveState({ accounts, resolutions, excluded: Array.from(excluded) })
-  }, [accounts, resolutions, excluded, user])
+  // ── Derived state ─────────────────────────────────────────────────────────
+  const accounts = Array.from(cardDocs.values()).map(d => d.account)
 
-  // ── State handlers ────────────────────────────────────────────────────────
-  const addResolution = useCallback((r: Resolution) => {
-    setResolutions(prev => {
-      const next = prev.filter(x => x.debitId !== r.debitId)
-      next.push(r)
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  /** Called when a card is created from CardListScreen */
+  const handleAddCard = useCallback((account: CardAccount) => {
+    if (!user) return
+    const cardDoc: CardDoc = { account, resolutions: [], excluded: [] }
+    setCardDocs(prev => new Map(prev).set(account.id, cardDoc))
+    saveCard(cardDoc).catch(console.error)
+  }, [user])
+
+  /** Called when a card's name/minSpend/bank/files/transactions changes */
+  const handleUpdateAccount = useCallback((updated: CardAccount) => {
+    setCardDocs(prev => {
+      const existing = prev.get(updated.id)
+      if (!existing) return prev
+      const next = new Map(prev)
+      const updatedDoc: CardDoc = { ...existing, account: updated }
+      next.set(updated.id, updatedDoc)
+      saveCard(updatedDoc).catch(console.error)
       return next
     })
   }, [])
 
-  const removeResolution = useCallback((debitId: string) => {
-    setResolutions(prev => prev.filter(r => r.debitId !== debitId))
+  /** Called when a card is deleted */
+  const handleDeleteCard = useCallback((accountId: string) => {
+    setCardDocs(prev => {
+      const next = new Map(prev)
+      next.delete(accountId)
+      return next
+    })
+    deleteCard(accountId).catch(console.error)
+    setScreen({ id: 'list' })
   }, [])
 
-  const toggleExcluded = useCallback((txId: string) => {
-    setExcluded(prev => {
-      const next = new Set(prev)
-      if (next.has(txId)) next.delete(txId)
-      else next.add(txId)
+  const handleAddResolution = useCallback((accountId: string, r: Resolution) => {
+    setCardDocs(prev => {
+      const existing = prev.get(accountId)
+      if (!existing) return prev
+      const next = new Map(prev)
+      const resolutions = [...existing.resolutions.filter(x => x.debitId !== r.debitId), r]
+      const updatedDoc: CardDoc = { ...existing, resolutions }
+      next.set(accountId, updatedDoc)
+      saveCardDebounced(updatedDoc)
+      return next
+    })
+  }, [])
+
+  const handleRemoveResolution = useCallback((accountId: string, debitId: string) => {
+    setCardDocs(prev => {
+      const existing = prev.get(accountId)
+      if (!existing) return prev
+      const next = new Map(prev)
+      const resolutions = existing.resolutions.filter(r => r.debitId !== debitId)
+      const updatedDoc: CardDoc = { ...existing, resolutions }
+      next.set(accountId, updatedDoc)
+      saveCardDebounced(updatedDoc)
+      return next
+    })
+  }, [])
+
+  const handleToggleExcluded = useCallback((accountId: string, txId: string) => {
+    setCardDocs(prev => {
+      const existing = prev.get(accountId)
+      if (!existing) return prev
+      const next = new Map(prev)
+      const excSet = new Set(existing.excluded)
+      if (excSet.has(txId)) excSet.delete(txId)
+      else excSet.add(txId)
+      const updatedDoc: CardDoc = { ...existing, excluded: Array.from(excSet) }
+      next.set(accountId, updatedDoc)
+      saveCardDebounced(updatedDoc)
       return next
     })
   }, [])
 
   // ── Render ────────────────────────────────────────────────────────────────
-  if (!authReady) {
-    // Firebase is checking stored credentials — show nothing to avoid flash
+  if (!authReady) return null
+
+  const activeDoc = screen.id === 'detail' ? cardDocs.get(screen.accountId) ?? null : null
+
+  // If the active card was deleted while on its detail screen, go back to list
+  if (screen.id === 'detail' && !activeDoc) {
+    setScreen({ id: 'list' })
     return null
   }
 
   return (
     <AuthGate user={user}>
-      {/* Sign-out button — always visible when logged in */}
+      {/* Sign-out */}
       <div className="fixed top-3 right-4 z-50">
         <button
           onClick={() => signOut(auth)}
@@ -106,21 +169,28 @@ export default function App() {
         </button>
       </div>
 
-      {step === 'pick' ? (
-        <CardPicker
+      {screen.id === 'list' && (
+        <CardListScreen
           accounts={accounts}
-          onAccountsChange={setAccounts}
-          onCheck={() => setStep('results')}
+          cardDocs={cardDocs}
+          onAddCard={handleAddCard}
+          onDeleteCard={handleDeleteCard}
+          onCardClick={accountId => setScreen({ id: 'detail', accountId })}
+          currentUid={user?.uid ?? ''}
         />
-      ) : (
-        <Results
-          accounts={accounts}
-          resolutions={resolutions}
-          excluded={excluded}
-          onAddResolution={addResolution}
-          onRemoveResolution={removeResolution}
-          onToggleExcluded={toggleExcluded}
-          onBack={() => setStep('pick')}
+      )}
+
+      {screen.id === 'detail' && activeDoc && (
+        <CardDetailScreen
+          account={activeDoc.account}
+          resolutions={activeDoc.resolutions}
+          excluded={new Set(activeDoc.excluded)}
+          cardDoc={activeDoc}
+          onAccountChange={handleUpdateAccount}
+          onAddResolution={r => handleAddResolution(activeDoc.account.id, r)}
+          onRemoveResolution={debitId => handleRemoveResolution(activeDoc.account.id, debitId)}
+          onToggleExcluded={txId => handleToggleExcluded(activeDoc.account.id, txId)}
+          onBack={() => setScreen({ id: 'list' })}
         />
       )}
     </AuthGate>
