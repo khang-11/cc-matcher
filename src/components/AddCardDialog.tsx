@@ -21,9 +21,9 @@ export function AddCardDialog({ onAdd, onClose }: AddCardDialogProps) {
   return (
     <>
       <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <Card className="w-full max-w-sm shadow-xl">
-          <CardContent className="pt-5 pb-5 px-5 space-y-4">
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+        <Card className="w-full sm:max-w-sm shadow-xl rounded-b-none sm:rounded-b-xl rounded-t-2xl">
+          <CardContent className="pt-5 pb-8 sm:pb-5 px-5 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold">Add card</h2>
               <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">

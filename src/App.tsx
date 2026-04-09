@@ -159,16 +159,6 @@ export default function App() {
 
   return (
     <AuthGate user={user}>
-      {/* Sign-out */}
-      <div className="fixed top-3 right-4 z-50">
-        <button
-          onClick={() => signOut(auth)}
-          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Sign out
-        </button>
-      </div>
-
       {screen.id === 'list' && (
         <CardListScreen
           accounts={accounts}
@@ -177,6 +167,7 @@ export default function App() {
           onDeleteCard={handleDeleteCard}
           onCardClick={accountId => setScreen({ id: 'detail', accountId })}
           currentUid={user?.uid ?? ''}
+          onSignOut={() => signOut(auth)}
         />
       )}
 

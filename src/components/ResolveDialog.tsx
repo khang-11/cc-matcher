@@ -78,8 +78,8 @@ export function ResolveDialog({
       <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
 
       {/* Dialog */}
-      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-        <div className="bg-background rounded-xl w-full max-w-md shadow-xl flex flex-col max-h-[85vh]">
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+        <div className="bg-background rounded-t-2xl sm:rounded-xl w-full sm:max-w-md shadow-xl flex flex-col max-h-[85vh]">
 
           {/* Header */}
           <div className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
@@ -174,7 +174,7 @@ export function ResolveDialog({
           {selected && gap !== null && (
             <>
               <Separator />
-              <div className="px-5 py-4 space-y-3 shrink-0">
+              <div className="px-5 pt-4 pb-8 sm:pb-4 space-y-3 shrink-0">
                 <div className={`rounded-lg px-4 py-2.5 text-sm ${
                   isExact     ? 'bg-green-500/10 text-green-600'
                   : isUnderpaid ? 'bg-amber-500/10 text-amber-600'

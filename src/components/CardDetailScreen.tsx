@@ -198,10 +198,10 @@ export function CardDetailScreen({
   return (
     <div className="flex min-h-screen flex-col bg-background">
       {/* Header */}
-      <div className="px-4 pt-10 pb-4 space-y-4">
+      <div className="px-4 pt-12 pb-4 space-y-3">
         <button
           onClick={onBack}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors py-1"
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
@@ -210,13 +210,12 @@ export function CardDetailScreen({
         </button>
 
         {/* Card title row */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-lg font-semibold truncate">{account.name}</p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-lg font-semibold truncate leading-snug">{account.name}</p>
             {account.bank && <p className="text-sm text-muted-foreground">{account.bank}</p>}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="text-right">
+            {/* Status inline under name on mobile */}
+            <div className="mt-0.5">
               {totalOutstanding > 0 ? (
                 <p className="text-sm font-semibold text-destructive">{formatAmount(totalOutstanding)} outstanding</p>
               ) : account.transactions.length > 0 ? (
@@ -230,18 +229,18 @@ export function CardDetailScreen({
                 </p>
               )}
             </div>
-            {/* Share button */}
-            <button
-              onClick={() => setShowShareDialog(true)}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              aria-label="Share card"
-              title="Share card"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
           </div>
+          {/* Share button */}
+          <button
+            onClick={() => setShowShareDialog(true)}
+            className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+            aria-label="Share card"
+            title="Share card"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
         </div>
         {hasMinSpend && progress !== null && (
           <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
@@ -250,23 +249,28 @@ export function CardDetailScreen({
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="px-4 mx-4 mb-4">
+      {/* Tabs — shorter labels on small screens */}
+      <div className="px-4 mb-4">
         <div className="flex rounded-lg border border-border p-0.5 gap-0.5 bg-muted/40">
           {tabs.map(t => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${tab === t.id ? 'bg-muted text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              className={`flex-1 py-2 text-xs sm:text-sm font-medium rounded-md transition-colors leading-tight ${tab === t.id ? 'bg-zinc-300 text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
-              {t.label}{t.count != null ? ` (${t.count})` : ''}
+              <span className="sm:hidden">{
+                t.id === 'mismatches' ? 'Issues' :
+                t.id === 'transactions' ? 'Txns' :
+                t.id === 'csvs' ? 'CSVs' : 'History'
+              }{t.count != null ? ` (${t.count})` : ''}</span>
+              <span className="hidden sm:inline">{t.label}{t.count != null ? ` (${t.count})` : ''}</span>
             </button>
           ))}
         </div>
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 px-4 pb-8 space-y-4">
+      <div className="flex-1 px-4 pb-10 space-y-4">
 
         {/* ── MISMATCHES TAB ── */}
         {tab === 'mismatches' && (
@@ -835,8 +839,8 @@ function ShareDialog({
   const ownerCount = account.owners.length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-sm bg-background rounded-2xl shadow-xl p-5 space-y-4" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 sm:p-4" onClick={onClose}>
+      <div className="w-full sm:max-w-sm bg-background rounded-t-2xl sm:rounded-2xl shadow-xl px-5 pt-5 pb-8 sm:pb-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">Share card</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">

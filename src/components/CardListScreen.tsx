@@ -13,6 +13,7 @@ interface CardListScreenProps {
   onAddCard: (account: CardAccount) => void
   onDeleteCard: (accountId: string) => void
   onCardClick: (accountId: string) => void
+  onSignOut: () => void
 }
 
 export function CardListScreen({
@@ -22,6 +23,7 @@ export function CardListScreen({
   onAddCard,
   onDeleteCard,
   onCardClick,
+  onSignOut,
 }: CardListScreenProps) {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [editingAccount, setEditingAccount] = useState<CardAccount | null>(null)
@@ -73,9 +75,17 @@ export function CardListScreen({
   return (
     <div className="flex min-h-screen flex-col bg-background">
       {/* Header */}
-      <div className="px-4 pt-10 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">CC Matcher</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Your cards</p>
+      <div className="px-4 pt-12 pb-4 flex items-end justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">CC Matcher</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Your cards</p>
+        </div>
+        <button
+          onClick={onSignOut}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors pb-1"
+        >
+          Sign out
+        </button>
       </div>
 
       {/* Card list */}
