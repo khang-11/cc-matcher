@@ -108,7 +108,10 @@ export function Results({
           const progress = hasMinSpend
             ? Math.min(qualifyingSpend / account.minSpend!, 1)
             : null
-          const isPositive = netBalance > 0
+          // netBalance = debits - credits
+          // positive = you owe; negative = credit balance (they owe you)
+          const owes = netBalance > 0
+          const inCredit = netBalance < 0
 
           return (
             <Card key={account.id}>
@@ -116,12 +119,12 @@ export function Results({
                 {/* Account name + net balance */}
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{account.name}</span>
-                  <span className={`text-sm font-semibold tabular-nums ${isPositive ? 'text-destructive' : 'text-green-500'}`}>
-                    {isPositive ? '+' : ''}{formatAmount(netBalance)}
+                  <span className={`text-sm font-semibold tabular-nums ${owes ? 'text-destructive' : inCredit ? 'text-green-500' : 'text-muted-foreground'}`}>
+                    {inCredit ? '+' : owes ? '-' : ''}{formatAmount(Math.abs(netBalance))}
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground -mt-1">
-                  {isPositive ? 'You owe' : 'Credit balance'}
+                  {owes ? 'You owe' : inCredit ? 'Credit balance' : 'Settled'}
                 </p>
 
                 {/* Min spend progress */}
@@ -263,6 +266,35 @@ export function Results({
                 </span>
               </CardContent>
             </Card>
+
+            {/* Unmatched credits — payments with no corresponding charge */}
+            {unmatchedCredits.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Unmatched payments ({unmatchedCredits.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-0 pb-0">
+                  {unmatchedCredits.map((c, i) => (
+                    <div key={c.id}>
+                      {i > 0 && <Separator />}
+                      <div className="flex items-center justify-between px-5 py-3">
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <span className="text-sm truncate">{c.description}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatDate(c.date)} · {c.card}
+                          </span>
+                        </div>
+                        <span className="text-sm font-semibold text-green-600 tabular-nums ml-3 shrink-0">
+                          +{formatAmount(c.amount)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
           </>
         )}
       </div>
