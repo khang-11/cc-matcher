@@ -1,57 +1,57 @@
-import { useState } from 'react'
-import { DropZone } from '@/components/DropZone'
+import { useState, useCallback } from 'react'
 import { CardPicker } from '@/components/CardPicker'
 import { Results } from '@/components/Results'
-import type { ParseResult } from '@/lib/parsers/types'
+import type { CardAccount, Resolution } from '@/lib/parsers/types'
 
-type Step =
-  | { name: 'drop' }
-  | { name: 'pick'; parseResult: ParseResult; fileName: string }
-  | { name: 'results'; parseResult: ParseResult; fileName: string; selectedCards: string[] }
+type Step = 'pick' | 'results'
 
 export default function App() {
-  const [step, setStep] = useState<Step>({ name: 'drop' })
+  const [step, setStep] = useState<Step>('pick')
+  const [accounts, setAccounts] = useState<CardAccount[]>([])
+  const [resolutions, setResolutions] = useState<Resolution[]>([])
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
 
-  if (step.name === 'drop') {
-    return (
-      <DropZone
-        onParsed={(parseResult, fileName) =>
-          setStep({ name: 'pick', parseResult, fileName })
-        }
-      />
-    )
-  }
+  const addResolution = useCallback((r: Resolution) => {
+    setResolutions(prev => {
+      // Replace existing resolution for this debit if any
+      const next = prev.filter(x => x.debitId !== r.debitId)
+      next.push(r)
+      return next
+    })
+  }, [])
 
-  if (step.name === 'pick') {
+  const removeResolution = useCallback((debitId: string) => {
+    setResolutions(prev => prev.filter(r => r.debitId !== debitId))
+  }, [])
+
+  const toggleExcluded = useCallback((txId: string) => {
+    setExcluded(prev => {
+      const next = new Set(prev)
+      if (next.has(txId)) next.delete(txId)
+      else next.add(txId)
+      return next
+    })
+  }, [])
+
+  if (step === 'pick') {
     return (
       <CardPicker
-        parseResult={step.parseResult}
-        fileName={step.fileName}
-        onCheck={selectedCards =>
-          setStep({
-            name: 'results',
-            parseResult: step.parseResult,
-            fileName: step.fileName,
-            selectedCards,
-          })
-        }
-        onReset={() => setStep({ name: 'drop' })}
+        accounts={accounts}
+        onAccountsChange={setAccounts}
+        onCheck={() => setStep('results')}
       />
     )
   }
 
-  // results
   return (
     <Results
-      transactions={step.parseResult.transactions}
-      selectedCards={step.selectedCards}
-      onBack={() =>
-        setStep({
-          name: 'pick',
-          parseResult: step.parseResult,
-          fileName: step.fileName,
-        })
-      }
+      accounts={accounts}
+      resolutions={resolutions}
+      excluded={excluded}
+      onAddResolution={addResolution}
+      onRemoveResolution={removeResolution}
+      onToggleExcluded={toggleExcluded}
+      onBack={() => setStep('pick')}
     />
   )
 }

@@ -19,6 +19,11 @@ function parseDate(raw: string): string {
   return `${year}-${month}-${day.padStart(2, '0')}`
 }
 
+/** Simple stable id: deterministic string from key fields */
+function makeId(date: string, type: string, amount: number, description: string, card: string): string {
+  return `${date}|${type}|${Math.round(amount * 100)}|${description}|${card}`
+}
+
 export const NABParser: Parser = {
   name: 'NAB',
 
@@ -27,6 +32,9 @@ export const NABParser: Parser = {
   },
 
   parse(rows: Record<string, string>[]): Transaction[] {
+    // Track counts per base-id to handle duplicates (same date/amount/description)
+    const idCounts = new Map<string, number>()
+
     return rows
       .filter(row => row['Date']?.trim() && row['Amount']?.trim())
       .map(row => {
@@ -43,12 +51,22 @@ export const NABParser: Parser = {
         const details = row['Transaction Details']?.trim() ?? ''
         const description = merchantName || details
 
+        const date = parseDate(row['Date'].trim())
+        const card = row['Account Number']?.trim() ?? 'Unknown'
+
+        // Make id unique even for duplicate rows
+        const baseId = makeId(date, type, amount, description, card)
+        const count = idCounts.get(baseId) ?? 0
+        idCounts.set(baseId, count + 1)
+        const id = count === 0 ? baseId : `${baseId}|${count}`
+
         return {
-          date: parseDate(row['Date'].trim()),
+          id,
+          date,
           description,
           amount,
           type,
-          card: row['Account Number']?.trim() ?? 'Unknown',
+          card,
           status,
           raw: row,
         }
