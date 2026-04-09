@@ -23,6 +23,8 @@ function formatDate(iso: string): string {
   return `${parseInt(day)} ${months[parseInt(month) - 1]} ${year}`
 }
 
+type Tab = 'outstanding' | 'all'
+
 export function Results({
   accounts,
   resolutions,
@@ -32,7 +34,8 @@ export function Results({
   onToggleExcluded,
   onBack,
 }: ResultsProps) {
-  const [resolveTarget, setResolveTarget] = useState<Transaction | null>(null)
+  const [resolveTarget, setResolveTarget] = useState<{ tx: Transaction; mode: 'debit' | 'credit' } | null>(null)
+  const [tab, setTab] = useState<Tab>('outstanding')
 
   // Merge all transactions across accounts
   const allTransactions = useMemo(
@@ -45,7 +48,7 @@ export function Results({
     [allTransactions, resolutions]
   )
 
-  // All outstanding rows = unmatched + remainders, sorted by date
+  // All outstanding rows = unmatched debits + debit remainders, sorted by date
   const outstandingRows = useMemo(() =>
     [...unmatched, ...remainders].sort((a, b) => a.date.localeCompare(b.date)),
     [unmatched, remainders]
@@ -63,25 +66,30 @@ export function Results({
       const totalDebits = txns.filter(t => t.type === 'debit').reduce((s, t) => s + t.amount, 0)
       const totalCredits = txns.filter(t => t.type === 'credit').reduce((s, t) => s + t.amount, 0)
       const netBalance = totalDebits - totalCredits
-
-      // Min spend progress: all debits not excluded
       const qualifyingSpend = txns
         .filter(t => t.type === 'debit' && !excluded.has(t.id))
         .reduce((s, t) => s + t.amount, 0)
-
       return { account, netBalance, qualifyingSpend }
     })
   }, [accounts, excluded])
 
-  // Check if a debit has a manual resolution
   const resolutionByDebitId = useMemo(() => {
     const map = new Map<string, Resolution>()
     for (const r of resolutions) map.set(r.debitId, r)
     return map
   }, [resolutions])
 
-  const isRemainder = (t: Transaction) => t.id.startsWith('remainder:')
-  const originalId = (t: Transaction) => t.id.replace(/^remainder:/, '')
+  const isDebitRemainder = (t: Transaction) => t.id.startsWith('remainder:debit:')
+  const originalDebitId = (t: Transaction) => t.id.replace(/^remainder:debit:/, '')
+
+  // All transactions for the "all" tab, sorted by date desc
+  const allTxnsSorted = useMemo(() =>
+    [...allTransactions].sort((a, b) => b.date.localeCompare(a.date)),
+    [allTransactions]
+  )
+
+  // Set of unmatched debit ids for badge display in "all" tab
+  const unmatchedDebitIds = useMemo(() => new Set(unmatched.map(t => t.id)), [unmatched])
 
   return (
     <div className="flex min-h-screen justify-center bg-background p-4">
@@ -95,28 +103,19 @@ export function Results({
             </svg>
             Back
           </Button>
-          <h1 className="text-lg font-semibold">
-            {outstandingRows.length === 0
-              ? 'All payments matched'
-              : `${outstandingRows.length} outstanding charge${outstandingRows.length !== 1 ? 's' : ''}`}
-          </h1>
+          <h1 className="text-lg font-semibold">Results</h1>
         </div>
 
         {/* Per-account summary cards */}
         {accountStats.map(({ account, netBalance, qualifyingSpend }) => {
           const hasMinSpend = account.minSpend !== null && account.minSpend > 0
-          const progress = hasMinSpend
-            ? Math.min(qualifyingSpend / account.minSpend!, 1)
-            : null
-          // netBalance = debits - credits
-          // positive = you owe; negative = credit balance (they owe you)
+          const progress = hasMinSpend ? Math.min(qualifyingSpend / account.minSpend!, 1) : null
           const owes = netBalance > 0
           const inCredit = netBalance < 0
 
           return (
             <Card key={account.id}>
               <CardContent className="py-4 px-5 space-y-3">
-                {/* Account name + net balance */}
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{account.name}</span>
                   <span className={`text-sm font-semibold tabular-nums ${owes ? 'text-destructive' : inCredit ? 'text-green-500' : 'text-muted-foreground'}`}>
@@ -126,8 +125,6 @@ export function Results({
                 <p className="text-xs text-muted-foreground -mt-1">
                   {owes ? 'You owe' : inCredit ? 'Credit balance' : 'Settled'}
                 </p>
-
-                {/* Min spend progress */}
                 {hasMinSpend && progress !== null && (
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-xs">
@@ -138,15 +135,10 @@ export function Results({
                       </span>
                     </div>
                     <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all duration-300"
-                        style={{ width: `${progress * 100}%` }}
-                      />
+                      <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
                     </div>
                     {progress < 1 && (
-                      <p className="text-xs text-muted-foreground">
-                        {formatAmount(account.minSpend! - qualifyingSpend)} to go
-                      </p>
+                      <p className="text-xs text-muted-foreground">{formatAmount(account.minSpend! - qualifyingSpend)} to go</p>
                     )}
                     {progress >= 1 && (
                       <p className="text-xs text-green-500 font-medium">Min spend reached</p>
@@ -158,116 +150,124 @@ export function Results({
           )
         })}
 
-        {/* All clear */}
-        {outstandingRows.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 gap-3">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <p className="text-sm text-muted-foreground text-center">
-                Every charge has a matching payment. You're all caught up!
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
+        {/* Tab switcher */}
+        <div className="flex rounded-lg border border-border overflow-hidden">
+          <button
+            onClick={() => setTab('outstanding')}
+            className={`flex-1 py-2 text-sm font-medium transition-colors ${tab === 'outstanding' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            Outstanding {outstandingRows.length > 0 && `(${outstandingRows.length})`}
+          </button>
+          <button
+            onClick={() => setTab('all')}
+            className={`flex-1 py-2 text-sm font-medium transition-colors ${tab === 'all' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            All transactions ({allTxnsSorted.length})
+          </button>
+        </div>
+
+        {tab === 'outstanding' ? (
           <>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Unmatched charges</CardTitle>
-              </CardHeader>
-              <CardContent className="px-0 pb-0">
-                {outstandingRows.map((t, i) => {
-                  const remainder = isRemainder(t)
-                  const origId = remainder ? originalId(t) : t.id
-                  const resolution = resolutionByDebitId.get(origId)
-                  const isExcluded = excluded.has(t.id) || excluded.has(origId)
+            {/* Unmatched charges */}
+            {outstandingRows.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12 gap-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-sm text-muted-foreground text-center">Every charge has a matching payment.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">Unmatched charges</CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-0 pb-0">
+                    {outstandingRows.map((t, i) => {
+                      const remainder = isDebitRemainder(t)
+                      const origId = remainder ? originalDebitId(t) : t.id
+                      const resolution = resolutionByDebitId.get(origId)
+                      const isExcluded = excluded.has(t.id) || excluded.has(origId)
 
-                  return (
-                    <div key={t.id}>
-                      {i > 0 && <Separator />}
-                      <div className="flex items-start justify-between px-5 py-3 gap-3">
-                        {/* Left: description + badges */}
-                        <div className="flex flex-col gap-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className={`text-sm font-medium truncate ${remainder ? 'text-muted-foreground' : ''}`}>
-                              {t.description}
-                            </span>
-                            {t.status === 'pending' && !remainder && (
-                              <Badge variant="outline" className="text-xs shrink-0">Pending</Badge>
-                            )}
-                            {remainder && (
-                              <Badge variant="outline" className="text-xs shrink-0 border-amber-500/50 text-amber-600">Partial</Badge>
-                            )}
-                            {isExcluded && (
-                              <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">Excluded</Badge>
-                            )}
-                          </div>
-                          <span className="text-xs text-muted-foreground">{formatDate(t.date)}</span>
-
-                          {/* Action buttons */}
-                          {!remainder && (
-                            <div className="flex items-center gap-2 mt-1">
-                              {/* Link payment button */}
-                              {!resolution && (
-                                <button
-                                  onClick={() => setResolveTarget(t)}
-                                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                                  </svg>
-                                  Link payment
-                                </button>
+                      return (
+                        <div key={t.id}>
+                          {i > 0 && <Separator />}
+                          <div className="flex items-start justify-between px-5 py-3 gap-3">
+                            <div className="flex flex-col gap-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`text-sm font-medium truncate ${remainder ? 'text-muted-foreground' : ''}`}>
+                                  {t.description}
+                                </span>
+                                {t.status === 'pending' && !remainder && (
+                                  <Badge variant="outline" className="text-xs shrink-0">Pending</Badge>
+                                )}
+                                {remainder && (
+                                  <Badge variant="outline" className="text-xs shrink-0 border-amber-500/50 text-amber-600">Partial</Badge>
+                                )}
+                                {isExcluded && (
+                                  <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">Excluded</Badge>
+                                )}
+                              </div>
+                              <span className="text-xs text-muted-foreground">{formatDate(t.date)}</span>
+                              {!remainder && (
+                                <div className="flex items-center gap-3 mt-1 flex-wrap">
+                                  {!resolution ? (
+                                    <button
+                                      onClick={() => setResolveTarget({ tx: t, mode: 'debit' })}
+                                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                      </svg>
+                                      Link payment
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => onRemoveResolution(t.id)}
+                                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors"
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                      Unlink
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => onToggleExcluded(t.id)}
+                                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7l10 10M7 17L17 7" />
+                                    </svg>
+                                    {isExcluded ? 'Include' : 'Exclude from min spend'}
+                                  </button>
+                                </div>
                               )}
-                              {/* Unlink button if already resolved */}
-                              {resolution && (
-                                <button
-                                  onClick={() => onRemoveResolution(t.id)}
-                                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors"
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                  Unlink
-                                </button>
-                              )}
-                              {/* Exclude toggle */}
-                              <button
-                                onClick={() => onToggleExcluded(t.id)}
-                                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 7l10 10M7 17L17 7" />
-                                </svg>
-                                {isExcluded ? 'Include' : 'Exclude from min spend'}
-                              </button>
                             </div>
-                          )}
+                            <span className="text-sm font-semibold text-destructive shrink-0 mt-0.5">
+                              {formatAmount(t.amount)}
+                            </span>
+                          </div>
                         </div>
+                      )
+                    })}
+                  </CardContent>
+                </Card>
 
-                        {/* Right: amount */}
-                        <span className="text-sm font-semibold text-destructive shrink-0 mt-0.5">
-                          {formatAmount(t.amount)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </CardContent>
-            </Card>
+                <Card className="bg-destructive/5 border-destructive/20">
+                  <CardContent className="flex items-center justify-between py-4 px-5">
+                    <span className="text-sm font-medium">Total outstanding</span>
+                    <span className="text-base font-bold text-destructive tabular-nums">
+                      {formatAmount(totalOutstanding)}
+                    </span>
+                  </CardContent>
+                </Card>
+              </>
+            )}
 
-            {/* Total outstanding */}
-            <Card className="bg-destructive/5 border-destructive/20">
-              <CardContent className="flex items-center justify-between py-4 px-5">
-                <span className="text-sm font-medium">Total outstanding</span>
-                <span className="text-base font-bold text-destructive tabular-nums">
-                  {formatAmount(totalOutstanding)}
-                </span>
-              </CardContent>
-            </Card>
-
-            {/* Unmatched credits — payments with no corresponding charge */}
+            {/* Unmatched credits */}
             {unmatchedCredits.length > 0 && (
               <Card>
                 <CardHeader className="pb-2">
@@ -279,14 +279,28 @@ export function Results({
                   {unmatchedCredits.map((c, i) => (
                     <div key={c.id}>
                       {i > 0 && <Separator />}
-                      <div className="flex items-center justify-between px-5 py-3">
+                      <div className="flex items-center justify-between px-5 py-3 gap-3">
                         <div className="flex flex-col gap-0.5 min-w-0">
-                          <span className="text-sm truncate">{c.description}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-sm truncate">{c.description}</span>
+                            {c.id.startsWith('remainder:credit:') && (
+                              <Badge variant="outline" className="text-xs shrink-0 border-amber-500/50 text-amber-600">Partial</Badge>
+                            )}
+                          </div>
                           <span className="text-xs text-muted-foreground">
                             {formatDate(c.date)} · {c.card}
                           </span>
+                          <button
+                            onClick={() => setResolveTarget({ tx: c, mode: 'credit' })}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 w-fit"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                            </svg>
+                            Link to charge
+                          </button>
                         </div>
-                        <span className="text-sm font-semibold text-green-600 tabular-nums ml-3 shrink-0">
+                        <span className="text-sm font-semibold text-green-600 tabular-nums shrink-0">
                           +{formatAmount(c.amount)}
                         </span>
                       </div>
@@ -296,15 +310,64 @@ export function Results({
               </Card>
             )}
           </>
+        ) : (
+          /* All transactions tab */
+          <Card>
+            <CardContent className="px-0 pb-0">
+              {allTxnsSorted.map((t, i) => {
+                const isExcluded = excluded.has(t.id)
+                const isUnmatched = t.type === 'debit' && unmatchedDebitIds.has(t.id)
+
+                return (
+                  <div key={t.id}>
+                    {i > 0 && <Separator />}
+                    <div className="flex items-start justify-between px-5 py-3 gap-3">
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-sm font-medium truncate">{t.description}</span>
+                          {t.status === 'pending' && (
+                            <Badge variant="outline" className="text-xs shrink-0">Pending</Badge>
+                          )}
+                          {isUnmatched && (
+                            <Badge variant="outline" className="text-xs shrink-0 border-destructive/50 text-destructive">Unmatched</Badge>
+                          )}
+                          {isExcluded && (
+                            <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">Excluded</Badge>
+                          )}
+                        </div>
+                        <span className="text-xs text-muted-foreground">{formatDate(t.date)} · {t.card}</span>
+                        {t.type === 'debit' && (
+                          <button
+                            onClick={() => onToggleExcluded(t.id)}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-0.5 w-fit"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M7 7l10 10M7 17L17 7" />
+                            </svg>
+                            {isExcluded ? 'Include in min spend' : 'Exclude from min spend'}
+                          </button>
+                        )}
+                      </div>
+                      <span className={`text-sm font-semibold shrink-0 mt-0.5 tabular-nums ${t.type === 'credit' ? 'text-green-600' : 'text-foreground'}`}>
+                        {t.type === 'credit' ? '+' : ''}{formatAmount(t.amount)}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </CardContent>
+          </Card>
         )}
       </div>
 
-      {/* Resolve dialog */}
       {resolveTarget && (
         <ResolveDialog
-          debit={resolveTarget}
+          anchor={resolveTarget.tx}
+          mode={resolveTarget.mode}
           unmatchedCredits={unmatchedCredits}
           allCredits={allCredits}
+          unmatchedDebits={unmatched}
+          allDebits={allTransactions.filter(t => t.type === 'debit')}
           onResolve={r => {
             onAddResolution(r)
             setResolveTarget(null)

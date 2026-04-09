@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Only authenticated users whose email is on the allowlist can read/write app state
+    match /appState/{document} {
+      allow read, write: if isAllowlisted();
+    }
+
+    // The allowlist itself: allowlisted users can read it (needed for the client-side check)
+    // but nobody can write it from the client — use the Firebase console to manage it
+    match /config/allowlist {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    function isAllowlisted() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/config/allowlist)
+        && request.auth.token.email in get(/databases/$(database)/documents/config/allowlist).data.emails;
+    }
+  }
+}

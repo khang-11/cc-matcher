@@ -1,3 +1,7 @@
+# Environment variables (contains Firebase config — do not commit)
+.env
+.env.*
+
 # Logs
 logs
 *.log

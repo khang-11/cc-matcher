@@ -23,12 +23,12 @@ export interface Parser {
   parse: (rows: Record<string, string>[]) => Transaction[]
 }
 
-/** One uploaded CSV = one card account */
+/** One card account — may have multiple CSVs merged into it */
 export interface CardAccount {
-  id: string                // random uuid, generated on upload
-  name: string              // user-editable, defaults to filename sans extension
-  bank: string
-  fileName: string
+  id: string                // random uuid, generated on card creation
+  name: string              // user-editable
+  bank: string              // detected from first CSV; empty string until first CSV uploaded
+  fileNames: string[]       // one entry per uploaded CSV file (for display / removal)
   transactions: Transaction[]
   minSpend: number | null   // null = no target set
 }

@@ -10,12 +10,15 @@ export interface MatchResult {
   /** All credits, for "show all" mode in resolve dialog */
   allCredits: Transaction[]
   /**
-   * Remainder rows: virtual transactions produced when a resolution is
-   * marked "remainder outstanding" and the credit didn't fully cover the debit.
-   * amount = debit.amount - credit.amount (always > 0 here).
-   * id = `remainder:${debitId}`
+   * Remainder debit rows: when a resolution is "remainder outstanding" and credit < debit.
+   * amount = debit.amount - credit.amount. id = `remainder:debit:${debitId}`
    */
   remainders: Transaction[]
+  /**
+   * Remainder credit rows: when a resolution links a credit to a smaller debit.
+   * amount = credit.amount - debit.amount. id = `remainder:credit:${creditId}`
+   */
+  remainderCredits: Transaction[]
 }
 
 /**
@@ -26,8 +29,16 @@ export function matchTransactions(
   transactions: Transaction[],
   resolutions: Resolution[],
 ): MatchResult {
-  const debits = transactions.filter(t => t.type === 'debit')
-  const credits = transactions.filter(t => t.type === 'credit')
+  // Deduplicate by id — when two CSVs overlap, same transaction appears twice
+  const seen = new Set<string>()
+  const unique = transactions.filter(t => {
+    if (seen.has(t.id)) return false
+    seen.add(t.id)
+    return true
+  })
+
+  const debits = unique.filter(t => t.type === 'debit')
+  const credits = unique.filter(t => t.type === 'credit')
 
   const allCredits = [...credits]
 
@@ -73,6 +84,10 @@ export function matchTransactions(
 
   const unmatched: Transaction[] = []
   const remainders: Transaction[] = []
+  const remainderCredits: Transaction[] = []
+
+  // Track which credits are consumed by manual resolutions (so they leave unmatchedCredits)
+  const manuallyConsumedCreditIds = new Set<string>()
 
   for (const debit of autoUnmatched) {
     const resolution = resolutionByDebitId.get(debit.id)
@@ -82,37 +97,51 @@ export function matchTransactions(
     }
 
     if (resolution.fullyResolved) {
-      // Fully resolved — drop it entirely
+      manuallyConsumedCreditIds.add(resolution.creditId)
       continue
     }
 
     // Remainder outstanding
     const credit = creditById.get(resolution.creditId)
     if (!credit) {
-      // Credit disappeared (shouldn't happen) — keep as unmatched
       unmatched.push(debit)
       continue
     }
 
+    manuallyConsumedCreditIds.add(credit.id)
     const gap = Math.round((debit.amount - credit.amount) * 100) / 100
+
     if (gap > 0) {
-      // Underpaid — show remainder row
+      // Credit < debit: debit remainder stays outstanding
       remainders.push({
         ...debit,
-        id: `remainder:${debit.id}`,
+        id: `remainder:debit:${debit.id}`,
         amount: gap,
-        description: debit.description,
+      })
+    } else if (gap < 0) {
+      // Credit > debit: excess credit stays as unmatched credit remainder
+      remainderCredits.push({
+        ...credit,
+        id: `remainder:credit:${credit.id}`,
+        amount: Math.abs(gap),
       })
     }
-    // If gap <= 0 (overpaid or exact), nothing stays outstanding
+    // gap === 0: exact, nothing outstanding
   }
+
+  // Remove manually consumed credits from unmatchedCredits, add remainder credits
+  const finalUnmatchedCredits = [
+    ...unmatchedCredits.filter(c => !manuallyConsumedCreditIds.has(c.id)),
+    ...remainderCredits,
+  ]
 
   return {
     unmatched,
     matched: autoMatched,
-    unmatchedCredits,
+    unmatchedCredits: finalUnmatchedCredits,
     allCredits,
     remainders,
+    remainderCredits,
   }
 }
 
