@@ -50,8 +50,13 @@ export const NABParser: Parser = {
         const date = parseDate(row['Date'].trim())
         const card = row['Account Number']?.trim() ?? 'Unknown'
 
+        // Pending = authorisation not yet settled (no Processed On date)
+        const txnType = row['Transaction Type']?.trim() ?? ''
+        const processedOn = row['Processed On']?.trim() ?? ''
+        const pending = txnType.endsWith('AUTHORISATION') && !processedOn
+
         // Make id unique even for duplicate rows
-        const baseId = makeId(date, type, amount, description, card)
+        const baseId = makeId(date, type, amount, details, card)
         const count = idCounts.get(baseId) ?? 0
         idCounts.set(baseId, count + 1)
         const id = count === 0 ? baseId : `${baseId}|${count}`
@@ -63,6 +68,7 @@ export const NABParser: Parser = {
           amount,
           type,
           card,
+          pending,
           raw: row,
         }
       })
