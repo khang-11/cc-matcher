@@ -150,6 +150,30 @@ export function CardDetailScreen({
         const parsed = await parseFile(file)
         const newTxns = parsed.transactions.filter(t => !existingIds.has(t.id))
         newTxns.forEach(t => existingIds.add(t.id))
+
+        // Replace any existing pending transactions that have now settled.
+        // A pending transaction is superseded when a new settled transaction
+        // has the same date, amount, card, and type (credit/debit).
+        const pendingByKey = new Map()
+        for (const t of updatedTransactions) {
+          if (t.pending) {
+            const key = `${t.date}|${t.amount}|${t.card}|${t.type}`
+            if (!pendingByKey.has(key)) pendingByKey.set(key, [])
+            pendingByKey.get(key).push(t)
+          }
+        }
+        const pendingIdsToRemove = new Set()
+        for (const t of newTxns) {
+          if (!t.pending) {
+            const key = `${t.date}|${t.amount}|${t.card}|${t.type}`
+            const candidates = pendingByKey.get(key)
+            if (candidates?.length) pendingIdsToRemove.add(candidates.shift().id)
+          }
+        }
+        if (pendingIdsToRemove.size > 0) {
+          updatedTransactions = updatedTransactions.filter(t => !pendingIdsToRemove.has(t.id))
+        }
+
         updatedTransactions = [...updatedTransactions, ...newTxns]
         if (!bank) bank = parsed.bank
         const uploadedFile: UploadedFile = {

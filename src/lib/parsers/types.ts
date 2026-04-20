@@ -7,6 +7,7 @@ export interface Transaction {
   amount: number        // always positive
   type: TransactionType
   card: string          // e.g. "Card ending 2953"
+  pending: boolean      // true = authorisation not yet settled
   raw: Record<string, string>
 }
 
