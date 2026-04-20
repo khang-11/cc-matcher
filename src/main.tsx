@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 
+console.log(`commit: ${import.meta.env.VITE_COMMIT_SHA ?? 'dev'}`)
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
