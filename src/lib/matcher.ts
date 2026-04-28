@@ -15,8 +15,8 @@ export interface MatchResult {
    */
   remainders: Transaction[]
   /**
-   * Remainder credit rows: when a resolution links a credit to a smaller debit.
-   * amount = credit.amount - debit.amount. id = `remainder:credit:${creditId}`
+   * Remainder credit rows: when one or more resolutions leave a credit partially used.
+   * amount = credit.amount - sum(debits using this credit). id = `remainder:credit:${creditId}`
    */
   remainderCredits: Transaction[]
 }
@@ -90,13 +90,44 @@ export function matchTransactions(
   for (const c of allCredits) {
     creditById.set(c.id, c)
   }
+  const debitById = new Map<string, Transaction>()
+  for (const d of debits) {
+    debitById.set(d.id, d)
+  }
 
-  const unmatched: Transaction[] = []
-  const remainders: Transaction[] = []
-  const remainderCredits: Transaction[] = []
+  // Pre-compute effective available credit amount per debit, in resolvedAt order.
+  // This handles credits used across multiple resolutions correctly.
+  // Also normalise legacy synthetic creditIds (remainder:credit:<id>) → original id.
+  const creditAvail = new Map<string, number>()
+  for (const c of allCredits) creditAvail.set(c.id, c.amount)
+
+  const effectiveAmountForDebit = new Map<string, number>()
+
+  const sortedResolutions = [...resolutions].sort((a, b) =>
+    (a.resolvedAt ?? '').localeCompare(b.resolvedAt ?? ''),
+  )
+
+  for (const r of sortedResolutions) {
+    const rawCreditId = r.creditId.replace(/^remainder:credit:/, '')
+    const debit = debitById.get(r.debitId)
+    const credit = creditById.get(rawCreditId)
+    if (!debit || !credit) continue
+
+    const available = creditAvail.get(rawCreditId) ?? 0
+    effectiveAmountForDebit.set(r.debitId, available)
+
+    // How much of the credit is consumed by this debit:
+    //   - overpaid (credit > debit): debit.amount consumed, remainder stays
+    //   - underpaid or exact: entire available credit consumed
+    const used = Math.min(debit.amount, available)
+    creditAvail.set(rawCreditId, Math.max(0, available - used))
+  }
 
   // Track which credits are consumed by manual resolutions (so they leave unmatchedCredits)
   const manuallyConsumedCreditIds = new Set<string>()
+
+  const unmatched: Transaction[] = []
+  const remainders: Transaction[] = []
 
   for (const debit of autoUnmatched) {
     const resolution = resolutionByDebitId.get(debit.id)
@@ -105,37 +136,49 @@ export function matchTransactions(
       continue
     }
 
-    if (resolution.fullyResolved) {
-      manuallyConsumedCreditIds.add(resolution.creditId)
-      continue
-    }
-
-    // Remainder outstanding
-    const credit = creditById.get(resolution.creditId)
+    const rawCreditId = resolution.creditId.replace(/^remainder:credit:/, '')
+    const credit = creditById.get(rawCreditId)
     if (!credit) {
       unmatched.push(debit)
       continue
     }
 
-    manuallyConsumedCreditIds.add(credit.id)
-    const gap = Math.round((debit.amount - credit.amount) * 100) / 100
+    manuallyConsumedCreditIds.add(rawCreditId)
 
-    if (gap > 0) {
-      // Credit < debit: debit remainder stays outstanding
+    const effectiveAmount = effectiveAmountForDebit.get(debit.id) ?? credit.amount
+    if (effectiveAmount <= 0) {
+      // Credit was fully consumed by prior resolutions — treat debit as unmatched
+      unmatched.push(debit)
+      continue
+    }
+
+    const gap = Math.round((debit.amount - effectiveAmount) * 100) / 100
+
+    if (gap > 0 && !resolution.fullyResolved) {
+      // Underpaid and not forgiven: debit remainder stays outstanding
       remainders.push({
         ...debit,
         id: `remainder:debit:${debit.id}`,
         amount: gap,
       })
-    } else if (gap < 0) {
-      // Credit > debit: excess credit stays as unmatched credit remainder
+    }
+    // gap < 0 (overpaid) and gap === 0 (exact): debit is resolved, no debit remainder
+    // Credit remainder (if any) is handled below via creditAvail
+  }
+
+  // Build remainder credits from the final available balance of each manually-consumed credit.
+  // Using creditAvail post-loop gives exactly one entry per credit regardless of how many
+  // debits referenced it.
+  const remainderCredits: Transaction[] = []
+  for (const [creditId, remaining] of creditAvail) {
+    if (remaining > 0 && manuallyConsumedCreditIds.has(creditId)) {
+      const credit = creditById.get(creditId)!
       remainderCredits.push({
         ...credit,
-        id: `remainder:credit:${credit.id}`,
-        amount: Math.abs(gap),
+        id: `remainder:credit:${creditId}`,
+        amount: remaining,
       })
     }
-    // gap === 0: exact, nothing outstanding
   }
 
   // Remove manually consumed credits from unmatchedCredits, add remainder credits

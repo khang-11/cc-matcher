@@ -16,6 +16,20 @@ import type { CardAccount, Resolution } from '@/lib/parsers/types'
 
 type Screen = { id: 'list' } | { id: 'detail'; accountId: string }
 
+/**
+ * One-time migration: strip legacy synthetic `remainder:credit:<id>` prefixes
+ * from resolution creditIds that may have been persisted before the fix.
+ * Returns the same object reference if no changes were needed.
+ */
+function migrateResolutionIds(doc: CardDoc): CardDoc {
+  const cleaned = doc.resolutions.map(r => {
+    const stripped = r.creditId.replace(/^remainder:credit:/, '')
+    return stripped === r.creditId ? r : { ...r, creditId: stripped }
+  })
+  const changed = cleaned.some((r, i) => r !== doc.resolutions[i])
+  return changed ? { ...doc, resolutions: cleaned } : doc
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [authReady, setAuthReady] = useState(false)
@@ -56,10 +70,15 @@ export default function App() {
         for (const id of next.keys()) {
           if (!incomingIds.has(id)) next.delete(id)
         }
-        // Update/add incoming docs
+        // Update/add incoming docs, migrating any legacy synthetic creditIds
         for (const d of docs) {
           remoteCardIds.current.add(d.account.id)
-          next.set(d.account.id, d)
+          const migrated = migrateResolutionIds(d)
+          if (migrated !== d) {
+            // Persist the cleaned doc back to Firestore (idempotent)
+            saveCard(migrated).catch(console.error)
+          }
+          next.set(d.account.id, migrated)
         }
         return next
       })

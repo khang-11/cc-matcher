@@ -65,7 +65,9 @@ export function ResolveDialog({
 
   const handleResolve = (fullyResolved: boolean) => {
     if (!debit || !credit) return
-    onResolve({ debitId: debit.id, creditId: credit.id, fullyResolved })
+    // Strip synthetic remainder prefix — always store the original transaction id
+    const effectiveCreditId = credit.id.replace(/^remainder:credit:/, '')
+    onResolve({ debitId: debit.id, creditId: effectiveCreditId, fullyResolved })
   }
 
   const listLabel = mode === 'debit'
