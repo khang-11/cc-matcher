@@ -383,7 +383,7 @@ export function CardDetailScreen({
                                       <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">Excluded</Badge>
                                     )}
                                   </div>
-                                  <span className="text-xs text-muted-foreground">{formatDate(t.date)}</span>
+                                  <span className="text-xs text-muted-foreground">{formatDate(t.date)} · ****{t.card.replace(/\D/g, '').slice(-4)}</span>
                                   {!remainder && (
                                     <div className="flex items-center gap-3 mt-1 flex-wrap">
                                       {!resolution ? (
