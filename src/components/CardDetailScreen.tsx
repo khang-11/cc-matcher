@@ -456,7 +456,7 @@ export function CardDetailScreen({
                                     <Badge variant="outline" className="text-xs shrink-0 border-amber-500/50 text-amber-600">Partial</Badge>
                                   )}
                                 </div>
-                                <span className="text-xs text-muted-foreground">{formatDate(c.date)} · {c.card}</span>
+                                <span className="text-xs text-muted-foreground">{formatDate(c.date)} · ****{c.card.replace(/\D/g, '').slice(-4)}</span>
                                 <button
                                   onClick={() => setResolveTarget({ tx: c, mode: 'credit' })}
                                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 w-fit"
