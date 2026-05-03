@@ -182,17 +182,46 @@ export function matchTransactions(
   }
 
   // Remove manually consumed credits from unmatchedCredits, add remainder credits
-  const finalUnmatchedCredits = [
+  const postPhase2UnmatchedCredits = [
     ...unmatchedCredits.filter(c => !manuallyConsumedCreditIds.has(c.id)),
     ...remainderCredits,
   ]
+
+  // --- Phase 3: auto-match remainder debits against unmatched credits ---
+  // e.g. $50 debit partially resolved with $13 → $37 remainder; a new $37 credit should auto-match it.
+  const remainderCreditPool = new Map<number, Transaction[]>()
+  for (const c of postPhase2UnmatchedCredits) {
+    const key = Math.round(c.amount * 100)
+    const bucket = remainderCreditPool.get(key) ?? []
+    bucket.push(c)
+    remainderCreditPool.set(key, bucket)
+  }
+
+  const autoResolvedRemaindCreditIds = new Set<string>()
+  const finalRemainders: Transaction[] = []
+
+  for (const remainder of remainders) {
+    const key = Math.round(remainder.amount * 100)
+    const bucket = remainderCreditPool.get(key)
+    if (bucket && bucket.length > 0) {
+      const credit = bucket.shift()!
+      autoResolvedRemaindCreditIds.add(credit.id)
+      // remainder is resolved — drop it from outstanding
+    } else {
+      finalRemainders.push(remainder)
+    }
+  }
+
+  const finalUnmatchedCredits = postPhase2UnmatchedCredits.filter(
+    c => !autoResolvedRemaindCreditIds.has(c.id),
+  )
 
   return {
     unmatched,
     matched: autoMatched,
     unmatchedCredits: finalUnmatchedCredits,
     allCredits,
-    remainders,
+    remainders: finalRemainders,
     remainderCredits,
   }
 }
