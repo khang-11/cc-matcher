@@ -13,6 +13,7 @@ import { AuthGate } from '@/components/AuthGate'
 import { CardListScreen } from '@/components/CardListScreen'
 import { CardDetailScreen } from '@/components/CardDetailScreen'
 import type { CardAccount, Resolution } from '@/lib/parsers/types'
+import { makeTxnId } from '@/lib/parsers/nab'
 
 type Screen = { id: 'list' } | { id: 'detail'; accountId: string }
 
@@ -28,6 +29,105 @@ function migrateResolutionIds(doc: CardDoc): CardDoc {
   })
   const changed = cleaned.some((r, i) => r !== doc.resolutions[i])
   return changed ? { ...doc, resolutions: cleaned } : doc
+}
+
+/**
+ * One-time migration: re-key persisted transaction ids using the current
+ * stable hashing scheme (see makeTxnId in parsers/nab.ts). Older exports
+ * hashed the raw `Transaction Details` string which drifts across CSV
+ * exports — same posted row could end up with two different ids and either
+ * dedupe asymmetrically or appear twice. The new scheme hashes the cleaned
+ * `description` field which is preserved on persisted transactions.
+ *
+ * All references to old ids are rewritten in lockstep:
+ *   - Transaction.id
+ *   - UploadedFile.transactionIds
+ *   - Resolution.debitId / Resolution.creditId
+ *   - excluded[]
+ *   - account.creditNames keys
+ *
+ * If two old transactions collapse to the same new id, the duplicates are
+ * dropped (this is the bug fix — they were always the same row).
+ */
+function migrateTransactionIds(doc: CardDoc): CardDoc {
+  const oldToNew = new Map<string, string>()
+  const seenNewIds = new Set<string>()
+  // Track per-base counter to disambiguate within-card duplicates the same
+  // way the parser does for within-CSV duplicates.
+  const baseCounts = new Map<string, number>()
+
+  const remappedTxns: typeof doc.account.transactions = []
+  for (const t of doc.account.transactions) {
+    const baseId = makeTxnId(t.date, t.type, t.amount, t.description, t.card)
+    const count = baseCounts.get(baseId) ?? 0
+    baseCounts.set(baseId, count + 1)
+    const newId = count === 0 ? baseId : `${baseId}|${count}`
+
+    if (newId === t.id) {
+      // Already in new format; keep as-is
+      oldToNew.set(t.id, t.id)
+      seenNewIds.add(t.id)
+      remappedTxns.push(t)
+      continue
+    }
+
+    if (seenNewIds.has(newId)) {
+      // Two old rows collapse to the same new id — drop this duplicate but
+      // still record the mapping so references point to the surviving row.
+      oldToNew.set(t.id, newId)
+      continue
+    }
+
+    oldToNew.set(t.id, newId)
+    seenNewIds.add(newId)
+    remappedTxns.push({ ...t, id: newId })
+  }
+
+  // Detect whether anything actually changed to avoid spurious writes
+  const changed =
+    remappedTxns.length !== doc.account.transactions.length ||
+    remappedTxns.some((t, i) => t !== doc.account.transactions[i])
+  if (!changed) return doc
+
+  const remap = (id: string): string => oldToNew.get(id) ?? id
+
+  const remappedFiles = doc.account.files.map(f => ({
+    ...f,
+    transactionIds: Array.from(new Set(f.transactionIds.map(remap))),
+  }))
+
+  const remappedCreditNames: Record<string, string> = {}
+  for (const [oldId, name] of Object.entries(doc.account.creditNames ?? {})) {
+    remappedCreditNames[remap(oldId)] = name
+  }
+
+  // Resolutions: dedupe by debitId after remap (collisions = same row)
+  const seenDebitIds = new Set<string>()
+  const remappedResolutions: Resolution[] = []
+  for (const r of doc.resolutions) {
+    const newDebitId = remap(r.debitId)
+    if (seenDebitIds.has(newDebitId)) continue
+    seenDebitIds.add(newDebitId)
+    remappedResolutions.push({
+      ...r,
+      debitId: newDebitId,
+      creditId: remap(r.creditId),
+    })
+  }
+
+  const remappedExcluded = Array.from(new Set(doc.excluded.map(remap)))
+
+  return {
+    ...doc,
+    account: {
+      ...doc.account,
+      transactions: remappedTxns,
+      files: remappedFiles,
+      creditNames: remappedCreditNames,
+    },
+    resolutions: remappedResolutions,
+    excluded: remappedExcluded,
+  }
 }
 
 export default function App() {
@@ -70,10 +170,11 @@ export default function App() {
         for (const id of next.keys()) {
           if (!incomingIds.has(id)) next.delete(id)
         }
-        // Update/add incoming docs, migrating any legacy synthetic creditIds
+        // Update/add incoming docs, migrating any legacy ids
         for (const d of docs) {
           remoteCardIds.current.add(d.account.id)
-          const migrated = migrateResolutionIds(d)
+          let migrated = migrateResolutionIds(d)
+          migrated = migrateTransactionIds(migrated)
           if (migrated !== d) {
             // Persist the cleaned doc back to Firestore (idempotent)
             saveCard(migrated).catch(console.error)
