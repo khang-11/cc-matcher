@@ -97,7 +97,10 @@ function migrateTransactionIds(doc: CardDoc): CardDoc {
   }))
 
   const remappedCreditNames: Record<string, string> = {}
-  for (const [oldId, name] of Object.entries(doc.account.creditNames ?? {})) {
+  // creditNames may not exist on older CardAccount shapes — handle defensively
+  const existingCreditNames =
+    (doc.account as { creditNames?: Record<string, string> }).creditNames ?? {}
+  for (const [oldId, name] of Object.entries(existingCreditNames)) {
     remappedCreditNames[remap(oldId)] = name
   }
 
@@ -123,7 +126,10 @@ function migrateTransactionIds(doc: CardDoc): CardDoc {
       ...doc.account,
       transactions: remappedTxns,
       files: remappedFiles,
-      creditNames: remappedCreditNames,
+      // Only include creditNames if the source had them (or if non-empty after remap)
+      ...(Object.keys(remappedCreditNames).length > 0 || 'creditNames' in doc.account
+        ? { creditNames: remappedCreditNames }
+        : {}),
     },
     resolutions: remappedResolutions,
     excluded: remappedExcluded,
