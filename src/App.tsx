@@ -272,6 +272,28 @@ export default function App() {
     })
   }, [])
 
+  /** Atomic state replacement — used by the "Reset & re-import" flow. */
+  const handleResetFromCsv = useCallback(
+    (accountId: string, next: { account: CardAccount; resolutions: Resolution[]; excluded: string[] }) => {
+      setCardDocs(prev => {
+        const existing = prev.get(accountId)
+        if (!existing) return prev
+        const updated = new Map(prev)
+        const updatedDoc: CardDoc = {
+          ...existing,
+          account: next.account,
+          resolutions: next.resolutions,
+          excluded: next.excluded,
+        }
+        updated.set(accountId, updatedDoc)
+        // Save immediately (no debounce) — this is a destructive operation
+        saveCard(updatedDoc).catch(console.error)
+        return updated
+      })
+    },
+    [],
+  )
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (!authReady) return null
 
@@ -308,6 +330,7 @@ export default function App() {
           onAddResolution={r => handleAddResolution(activeDoc.account.id, r)}
           onRemoveResolution={debitId => handleRemoveResolution(activeDoc.account.id, debitId)}
           onToggleExcluded={txId => handleToggleExcluded(activeDoc.account.id, txId)}
+          onResetFromCsv={next => handleResetFromCsv(activeDoc.account.id, next)}
           onBack={() => setScreen({ id: 'list' })}
         />
       )}

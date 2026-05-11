@@ -23,6 +23,17 @@ interface CardDetailScreenProps {
   onAddResolution: (r: Resolution) => void
   onRemoveResolution: (debitId: string) => void
   onToggleExcluded: (txId: string) => void
+  /**
+   * Atomic replace: swap the whole transaction set (typically from a fresh
+   * full-history CSV) and rewrite the supporting state in one Firestore
+   * write — preserving any resolutions / excluded ids whose referenced
+   * transactions still exist after the swap.
+   */
+  onResetFromCsv: (next: {
+    account: CardAccount
+    resolutions: Resolution[]
+    excluded: string[]
+  }) => void
   onBack: () => void
 }
 
@@ -60,6 +71,7 @@ export function CardDetailScreen({
   onAddResolution,
   onRemoveResolution,
   onToggleExcluded,
+  onResetFromCsv,
   onBack,
 }: CardDetailScreenProps) {
   const [tab, setTab] = useState<Tab>('mismatches')
@@ -68,6 +80,18 @@ export function CardDetailScreen({
   const [paymentsOpen, setPaymentsOpen] = useState(true)
   const [showShareDialog, setShowShareDialog] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const resetInputRef = useRef<HTMLInputElement>(null)
+  const [resetPreview, setResetPreview] = useState<{
+    file: File
+    parsed: { bank: string; transactions: Transaction[] }
+    keepResolutions: number
+    dropResolutions: number
+    keepExcluded: number
+    dropExcluded: number
+  } | null>(null)
+
+  const [renamingCreditId, setRenamingCreditId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   const [txFilterOpen, setTxFilterOpen] = useState(false)
   const [txFilter, setTxFilter] = useState<'all' | 'debits' | 'credits'>('all')
@@ -188,6 +212,61 @@ export function CardDetailScreen({
     onAccountChange({ ...account, bank, transactions: updatedTransactions, files: updatedFiles })
     if (inputRef.current) inputRef.current.value = ''
   }, [account, onAccountChange])
+
+  // ── Reset & re-import (replace all transactions from a single CSV) ───────
+  const handleResetFile = useCallback(async (file: File) => {
+    if (!file.name.endsWith('.csv')) return
+    try {
+      const parsed = await parseFile(file)
+      const newIds = new Set(parsed.transactions.map(t => t.id))
+
+      const keepRes = myResolutions.filter(r => newIds.has(r.debitId) && newIds.has(r.creditId))
+      const dropRes = myResolutions.length - keepRes.length
+
+      const keepExc = Array.from(excluded).filter(id => newIds.has(id))
+      const dropExc = excluded.size - keepExc.length
+
+      setResetPreview({
+        file,
+        parsed,
+        keepResolutions: keepRes.length,
+        dropResolutions: dropRes,
+        keepExcluded: keepExc.length,
+        dropExcluded: dropExc,
+      })
+    } catch {
+      // ignore — bad CSV
+    } finally {
+      if (resetInputRef.current) resetInputRef.current.value = ''
+    }
+  }, [myResolutions, excluded])
+
+  const confirmReset = () => {
+    if (!resetPreview) return
+    const { file, parsed } = resetPreview
+    const newIds = new Set(parsed.transactions.map(t => t.id))
+
+    const nextAccount: CardAccount = {
+      ...account,
+      bank: parsed.bank || account.bank,
+      transactions: parsed.transactions,
+      files: [{
+        name: file.name,
+        uploadedAt: new Date().toISOString(),
+        transactionIds: parsed.transactions.map(t => t.id),
+      }],
+    }
+
+    const nextResolutions = myResolutions.filter(r => newIds.has(r.debitId) && newIds.has(r.creditId))
+    const nextExcluded = Array.from(excluded).filter(id => newIds.has(id))
+
+    onResetFromCsv({
+      account: nextAccount,
+      resolutions: nextResolutions,
+      excluded: nextExcluded,
+    })
+    setResetPreview(null)
+  }
 
   // ── Remove CSV ────────────────────────────────────────────────────────────
   const removeFile = (fileName: string) => {
@@ -445,34 +524,71 @@ export function CardDetailScreen({
                     {paymentsOpen && (
                       <CardContent className="px-0 pb-0 pt-0">
                         <Separator />
-                        {unmatchedCredits.map((c, i) => (
-                          <div key={c.id}>
-                            {i > 0 && <Separator />}
-                            <div className="flex items-center justify-between px-5 py-3 gap-3">
-                              <div className="flex flex-col gap-0.5 min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-sm truncate">{c.description}</span>
-                                  {c.id.startsWith('remainder:credit:') && (
-                                    <Badge variant="outline" className="text-xs shrink-0 border-amber-500/50 text-amber-600">Partial</Badge>
-                                  )}
-                                </div>
-                                <span className="text-xs text-muted-foreground">{formatDate(c.date)} · ****{c.card.replace(/\D/g, '').slice(-4)}</span>
-                                <button
-                                  onClick={() => setResolveTarget({ tx: c, mode: 'credit' })}
-                                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 w-fit"
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                                  </svg>
-                                  Link to charge
-                                </button>
-                              </div>
-                              <span className="text-sm font-semibold text-green-600 tabular-nums shrink-0">
-                                +{formatAmount(c.amount)}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
+                         {unmatchedCredits.map((c, i) => {
+                           const rawId = c.id.replace(/^remainder:credit:/, '')
+                           const customName = account.creditNames?.[rawId]
+                           const isRenaming = renamingCreditId === rawId
+                           return (
+                           <div key={c.id}>
+                             {i > 0 && <Separator />}
+                             <div className="flex items-center justify-between px-5 py-3 gap-3">
+                               <div className="flex flex-col gap-0.5 min-w-0">
+                                 <div className="flex items-center gap-1.5 flex-wrap">
+                                   {isRenaming ? (
+                                     <input
+                                       autoFocus
+                                       className="text-sm border-b border-border bg-transparent outline-none w-40"
+                                       value={renameValue}
+                                       onChange={e => setRenameValue(e.target.value)}
+                                       onBlur={() => {
+                                         const trimmed = renameValue.trim()
+                                         const names = { ...(account.creditNames ?? {}) }
+                                         if (trimmed) names[rawId] = trimmed
+                                         else delete names[rawId]
+                                         onAccountChange({ ...account, creditNames: names })
+                                         setRenamingCreditId(null)
+                                       }}
+                                       onKeyDown={e => {
+                                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                                         if (e.key === 'Escape') { setRenamingCreditId(null) }
+                                       }}
+                                     />
+                                   ) : (
+                                     <span className="text-sm truncate">{customName ?? c.description}</span>
+                                   )}
+                                   {c.id.startsWith('remainder:credit:') && (
+                                     <Badge variant="outline" className="text-xs shrink-0 border-amber-500/50 text-amber-600">Partial</Badge>
+                                   )}
+                                 </div>
+                                 <span className="text-xs text-muted-foreground">{formatDate(c.date)} · ****{c.card.replace(/\D/g, '').slice(-4)}</span>
+                                 <div className="flex items-center gap-3 mt-1 flex-wrap">
+                                   <button
+                                     onClick={() => setResolveTarget({ tx: c, mode: 'credit' })}
+                                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                   >
+                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                     </svg>
+                                     Link to charge
+                                   </button>
+                                   <button
+                                     onClick={() => { setRenamingCreditId(rawId); setRenameValue(customName ?? c.description) }}
+                                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                   >
+                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                     </svg>
+                                     {customName ? 'Rename' : 'Name'}
+                                   </button>
+                                 </div>
+                               </div>
+                               <span className="text-sm font-semibold text-green-600 tabular-nums shrink-0">
+                                 +{formatAmount(c.amount)}
+                               </span>
+                             </div>
+                           </div>
+                           )
+                         })}
                       </CardContent>
                     )}
                   </Card>
@@ -687,6 +803,22 @@ export function CardDetailScreen({
               {account.files.length === 0 ? 'Upload CSV' : '+ Upload another CSV'}
             </div>
             <input ref={inputRef} type="file" accept=".csv" multiple className="hidden" onChange={e => handleFiles(e.target.files)} />
+
+            {account.transactions.length > 0 && (
+              <button
+                onClick={() => resetInputRef.current?.click()}
+                className="w-full text-xs text-muted-foreground hover:text-destructive transition-colors py-2 underline underline-offset-2"
+              >
+                Reset & re-import full history from a single CSV
+              </button>
+            )}
+            <input
+              ref={resetInputRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleResetFile(f) }}
+            />
           </>
         )}
 
@@ -801,6 +933,49 @@ export function CardDetailScreen({
           }}
           onClose={() => setResolveTarget(null)}
         />
+      )}
+
+      {/* Reset confirm dialog */}
+      {resetPreview && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 sm:p-4" onClick={() => setResetPreview(null)}>
+          <div className="w-full sm:max-w-sm bg-background rounded-t-2xl sm:rounded-2xl shadow-xl px-5 pt-5 pb-8 sm:pb-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div>
+              <h2 className="text-base font-semibold">Reset & re-import</h2>
+              <p className="text-xs text-muted-foreground mt-1">{resetPreview.file.name}</p>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Existing transactions</span>
+                <span className="tabular-nums">{account.transactions.length}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">After import</span>
+                <span className="tabular-nums">{resetPreview.parsed.transactions.length}</span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Manual resolutions kept</span>
+                <span className="tabular-nums">{resetPreview.keepResolutions} of {myResolutions.length}</span>
+              </div>
+              {resetPreview.dropResolutions > 0 && (
+                <p className="text-xs text-amber-600">
+                  {resetPreview.dropResolutions} resolution{resetPreview.dropResolutions !== 1 ? 's' : ''} reference rows not in this CSV and will be dropped.
+                </p>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Excluded items kept</span>
+                <span className="tabular-nums">{resetPreview.keepExcluded} of {excluded.size}</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              All existing transactions and uploaded CSVs for this card will be replaced with the contents of this single file. This cannot be undone.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setResetPreview(null)}>Cancel</Button>
+              <Button variant="destructive" className="flex-1" onClick={confirmReset}>Reset & import</Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Share dialog */}

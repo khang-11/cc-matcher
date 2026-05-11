@@ -37,6 +37,7 @@ export function CardListScreen({
       transactions: [],
       minSpend,
       owners: [currentUid],
+      creditNames: {},
     }
     onAddCard(newAccount)
     setShowAddDialog(false)

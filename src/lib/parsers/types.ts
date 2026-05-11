@@ -42,6 +42,7 @@ export interface CardAccount {
   transactions: Transaction[]
   minSpend: number | null   // null = no target set
   owners: string[]          // Firebase UIDs of users who have access to this card
+  creditNames: Record<string, string> // creditId → user-defined label
 }
 
 /** A manual link between an unmatched debit and a credit */
